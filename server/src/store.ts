@@ -1,4 +1,4 @@
-import type { RunState } from './engine.ts';
+import type { RunState } from './engine.js';
 
 export interface Store {
   insert(run: RunState): Promise<void>;

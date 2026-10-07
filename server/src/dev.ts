@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
-import { handle } from './http.ts';
-import { boot } from './runtime.ts';
+import { handle } from './http.js';
+import { boot } from './runtime.js';
 
 const { cfg, svc } = boot();
 createServer(async (req, res) => {

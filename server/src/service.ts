@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { keccak256, type Address, type Hex } from 'viem';
-import { authenticate, login, loginMessage, newNonce } from './auth.ts';
-import type { Chain } from './chain.ts';
-import type { Cfg } from './config.ts';
-import { cashOut, isPaid, ladderFor, MODE_KEYS, newRun, publicView, rowsOf, stepRun, type RunState } from './engine.ts';
-import type { Store } from './store.ts';
+import { authenticate, login, loginMessage, newNonce } from './auth.js';
+import type { Chain } from './chain.js';
+import type { Cfg } from './config.js';
+import { cashOut, isPaid, ladderFor, MODE_KEYS, newRun, publicView, rowsOf, stepRun, type RunState } from './engine.js';
+import type { Store } from './store.js';
 
 const hex32 = () => ('0x' + randomBytes(32).toString('hex')) as Hex;
 const TICKET_TTL = 10 * 60;
