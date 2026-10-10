@@ -1,6 +1,6 @@
 import type { Hex } from 'viem';
-import type { Cfg } from './config.js';
-import type { Service } from './service.js';
+import type { Cfg } from './config.ts';
+import type { Service } from './service.ts';
 
 export interface Req { method: string; path: string; headers: Record<string, string | undefined>; body?: any }
 export interface Res { status: number; body: unknown }
@@ -31,6 +31,7 @@ export async function handle(svc: Service, cfg: Cfg, req: Req): Promise<Res> {
       case 'POST /api/step': return { status: 200, body: await svc.step(player, req.body?.col, req.body?.activate) };
       case 'POST /api/cashout': return { status: 200, body: await svc.cashout(player) };
       case 'GET /api/run': return { status: 200, body: await svc.current(player) };
+      case 'GET /api/unlocks': return { status: 200, body: await svc.unlocks(player) };
       case 'GET /api/history': return { status: 200, body: await svc.history(player) };
     }
     return { status: 404, body: { error: 'not found' } };

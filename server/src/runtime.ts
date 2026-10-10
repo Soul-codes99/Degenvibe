@@ -1,8 +1,8 @@
-import { loadCfg } from './config.js';
-import { makeChain } from './chain.js';
-import { createService } from './service.js';
-import { PgStore } from './pgStore.js';
-import { MemoryStore } from './store.js';
+import { loadCfg } from './config.ts';
+import { makeChain } from './chain.ts';
+import { createService } from './service.ts';
+import { PgStore } from './pgStore.ts';
+import { MemoryStore } from './store.ts';
 
 export function boot(env: Record<string, string | undefined> = process.env) {
   const cfg = loadCfg(env);

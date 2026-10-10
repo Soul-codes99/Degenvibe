@@ -1,13 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { keccak256, type Address, type Hex } from 'viem';
-import { authenticate, login, loginMessage, newNonce } from './auth.js';
-import type { Chain } from './chain.js';
-import type { Cfg } from './config.js';
-import { cashOut, isPaid, ladderFor, MODE_KEYS, newRun, publicView, rowsOf, stepRun, type RunState } from './engine.js';
-import type { Store } from './store.js';
+import { authenticate, login, loginMessage, newNonce } from './auth.ts';
+import type { Chain } from './chain.ts';
+import type { Cfg } from './config.ts';
+import { effectiveMaxStake } from './limits.ts';
+import { cashOut, isPaid, ladderFor, MODE_KEYS, newRun, publicView, rowsOf, stepRun, type RunState } from './engine.ts';
+import type { Store } from './store.ts';
 
 const hex32 = () => ('0x' + randomBytes(32).toString('hex')) as Hex;
 const TICKET_TTL = 10 * 60;
+const NAMES: Record<number, string> = { 3: 'Soul', 4: 'Ember', 5: 'Frost' };
+const fmtEth = (w: bigint) => (Number(w) / 1e18).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0';
 
 export function createService(cfg: Cfg, store: Store, chain: Chain) {
   /** Sends the settle transaction exactly once. Safe to call repeatedly: it re-checks the chain first. */
@@ -26,6 +29,23 @@ export function createService(cfg: Cfg, store: Store, chain: Chain) {
     });
   }
   const settleSafe = (commit: string) => settleOnChain(commit).catch((e) => console.error('settle failed, will retry', commit, String(e).slice(0, 200)));
+  /** Mode limits as they are right now: the max stake follows the free house pool. */
+  async function limits(mode: number) {
+    const [mc, free] = await Promise.all([chain.modeCfg(mode), chain.freePool()]);
+    return { ...mc, ceiling: mc.maxStake, maxStake: effectiveMaxStake(mode, free, mc.maxStake, mc.minStake, mc.step), freePool: free };
+  }
+  /** A paid blob is unlocked by HOLDING enough $SOUL right now, or by having WAGERED enough ETH. Either one is enough. */
+  async function unlockState(player: Address) {
+    const volume = await store.volume(player);
+    let bal = 0n, dec = 18;
+    try { const r = await chain.soulBalance(player); bal = r.bal; dec = r.dec; } catch (e) { console.error('soul balance read failed', String(e).slice(0, 120)); }
+    const owned: Record<number, boolean> = {}, via: Record<number, 'hold' | 'play' | null> = {};
+    for (const id of [3, 4, 5]) {
+      const byHold = bal >= cfg.hold[id] * 10n ** BigInt(dec), byPlay = volume >= cfg.unlock[id];
+      owned[id] = byHold || byPlay; via[id] = byHold ? 'hold' : byPlay ? 'play' : null;
+    }
+    return { volume, balance: bal / 10n ** BigInt(dec), owned, via };
+  }
   const view = async (commit: string) => publicView((await store.get(commit))!);
 
   return {
@@ -36,11 +56,12 @@ export function createService(cfg: Cfg, store: Store, chain: Chain) {
 
     async config() {
       const modes = await Promise.all([0, 1, 2].map(async (m) => {
-        const c = await chain.modeCfg(m);
-        return { id: m, key: MODE_KEYS[m], rows: rowsOf(m), minStake: c.minStake.toString(), maxStake: c.maxStake.toString(), step: c.step.toString(), enabled: c.enabled,
+        const c = await limits(m);
+        return { id: m, key: MODE_KEYS[m], rows: rowsOf(m), minStake: c.minStake.toString(), maxStake: c.maxStake.toString(), freePool: c.freePool.toString(), step: c.step.toString(), enabled: c.enabled,
           ladders: Object.fromEntries([0, 3, 4, 5].map((ch) => [ch, ladderFor(m, ch).map((x) => Math.round(x * 100) / 100)])) };
       }));
-      return { chainId: cfg.chainId, vault: cfg.vault, shop: cfg.shop, operator: chain.operator, modes };
+      return { chainId: cfg.chainId, vault: cfg.vault, operator: chain.operator, modes, unlock: { 3: cfg.unlock[3].toString(), 4: cfg.unlock[4].toString(), 5: cfg.unlock[5].toString() },
+        hold: { 3: cfg.hold[3].toString(), 4: cfg.hold[4].toString(), 5: cfg.hold[5].toString() }, soul: cfg.soul };
     },
 
     async ticket(player: Address, p: { mode: number; character: number; stake: string }) {
@@ -56,10 +77,14 @@ export function createService(cfg: Cfg, store: Store, chain: Chain) {
           return { ticket: { player, mode, character, stake: cur.stake, commit: cur.commit, deadline: cur.ticket!.deadline }, signature: cur.ticket!.signature, commit: cur.commit };
         await store.update(cur.commit, async (r) => { r.status = 'expired'; return { run: r, out: null }; });
       }
-      if (isPaid(character) && !(await chain.owns(player, character))) throw new Error('character locked: unlock it in the shop first');
-      const mc = await chain.modeCfg(mode);
+      if (isPaid(character)) {
+        const u = await unlockState(player);
+        if (!u.owned[character]) throw new Error(`${NAMES[character]} unlocks by holding ${cfg.hold[character].toLocaleString('en-US')} $SOUL or wagering ${fmtEth(cfg.unlock[character])} ETH (you have wagered ${fmtEth(u.volume)})`);
+      }
+      const mc = await limits(mode);
       if (!mc.enabled) throw new Error('mode is off');
-      if (stake < mc.minStake || stake > mc.maxStake || stake % mc.step !== 0n) throw new Error('stake out of range or not a whole step');
+      if (stake > mc.maxStake && stake <= mc.ceiling) throw new Error(`max stake right now is ${fmtEth(mc.maxStake)} ETH. It grows with the house pool.`);
+      if (stake < mc.minStake || stake > mc.ceiling || stake % mc.step !== 0n) throw new Error('stake out of range or not a whole step');
       const serverSeed = hex32(), commit = keccak256(serverSeed);
       const deadline = Math.floor(Date.now() / 1000) + TICKET_TTL;
       const signature = await chain.signTicket({ player, mode, character, stake, commit, deadline: BigInt(deadline) });
@@ -108,6 +133,13 @@ export function createService(cfg: Cfg, store: Store, chain: Chain) {
       if (active?.status === 'settling') await settleSafe(active.commit);       // opportunistic retry
       const run = active ? await view(active.commit) : null;
       return { run: run && run.status !== 'ticketed' ? run : null };
+    },
+
+    async unlocks(player: Address) {
+      const u = await unlockState(player);
+      return { volume: u.volume.toString(), balance: u.balance.toString(), owned: u.owned, via: u.via,
+        thresholds: { 3: cfg.unlock[3].toString(), 4: cfg.unlock[4].toString(), 5: cfg.unlock[5].toString() },
+        hold: { 3: cfg.hold[3].toString(), 4: cfg.hold[4].toString(), 5: cfg.hold[5].toString() } };
     },
 
     async history(player: Address) {

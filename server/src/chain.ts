@@ -1,18 +1,22 @@
 import { createPublicClient, createWalletClient, defineChain, http, parseAbi, parseEventLogs, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import type { Cfg } from './config.js';
+import type { Cfg } from './config.ts';
 
 const vaultAbi = parseAbi([
   'event RunStarted(uint256 indexed runId, address indexed player, uint8 mode, uint8 character, uint256 stake, bytes32 commit, bytes32 clientSeed, uint256 maxPayout)',
   'function runs(uint256) view returns (address player, uint128 stake, uint128 fee, uint128 maxPayout, uint128 exposure, uint64 startedAt, uint8 mode, uint8 status, bytes32 commit)',
   'function modes(uint8) view returns (uint128 minStake, uint128 maxStake, uint128 step, uint16 feeBps, uint32 topMultX100, bool enabled)',
   'function settle(uint256 id, uint256 payout, bytes32 seed)',
+  'function pool() view returns (uint256)',
+  'function reserved() view returns (uint256)',
 ]);
+const erc20Abi = parseAbi(['function balanceOf(address) view returns (uint256)', 'function decimals() view returns (uint8)']);
 const shopAbi = parseAbi(['function owns(address player, uint8 id) view returns (bool)']);
 
 export function makeChain(cfg: Cfg) {
   const chain = defineChain({ id: cfg.chainId, name: 'robinhood-testnet', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [cfg.rpc] } } });
   const pub = createPublicClient({ chain, transport: http(cfg.rpc) });
+  let dec: number | undefined;
   const account = privateKeyToAccount(cfg.opKey);
   const wallet = createWalletClient({ account, chain, transport: http(cfg.rpc) });
   return {
@@ -23,6 +27,12 @@ export function makeChain(cfg: Cfg) {
         types: { Ticket: [{ name: 'player', type: 'address' }, { name: 'mode', type: 'uint8' }, { name: 'character', type: 'uint8' }, { name: 'stake', type: 'uint128' }, { name: 'commit', type: 'bytes32' }, { name: 'deadline', type: 'uint64' }] },
         primaryType: 'Ticket', message: m,
       }),
+    freePool: async () => { const [p, r] = await Promise.all([pub.readContract({ address: cfg.vault, abi: vaultAbi, functionName: 'pool' }), pub.readContract({ address: cfg.vault, abi: vaultAbi, functionName: 'reserved' })]); return p - r; },
+    soulBalance: async (p: Address) => {
+      dec ??= Number(await pub.readContract({ address: cfg.soul, abi: erc20Abi, functionName: 'decimals' }));
+      const bal = await pub.readContract({ address: cfg.soul, abi: erc20Abi, functionName: 'balanceOf', args: [p] });
+      return { bal, dec };
+    },
     owns: (p: Address, id: number) => pub.readContract({ address: cfg.shop, abi: shopAbi, functionName: 'owns', args: [p, id] }),
     modeCfg: async (m: number) => { const [minStake, maxStake, step, feeBps, topMultX100, enabled] = await pub.readContract({ address: cfg.vault, abi: vaultAbi, functionName: 'modes', args: [m] }); return { minStake, maxStake, step, feeBps, topMultX100, enabled }; },
     runStarted: async (hash: Hex) => {

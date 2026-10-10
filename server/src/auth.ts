@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { recoverMessageAddress, getAddress, type Address, type Hex } from 'viem';
-import type { Store } from './store.js';
+import type { Store } from './store.ts';
 
 export const loginMessage = (address: string, nonce: string, issued: string) =>
   `DEGEN VIBE login (testnet only)\nAddress: ${address}\nNonce: ${nonce}\nIssued: ${issued}`;

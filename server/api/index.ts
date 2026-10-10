@@ -1,6 +1,6 @@
 // Vercel entry point. vercel.json rewrites every /api/* request here.
-import { handle } from '../src/http.js';
-import { boot } from '../src/runtime.js';
+import { handle } from '../src/http.ts';
+import { boot } from '../src/runtime.ts';
 
 let app: ReturnType<typeof boot> | undefined;
 export default async function (req: any, res: any) {

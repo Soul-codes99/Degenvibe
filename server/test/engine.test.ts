@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import type { Hex } from 'viem';
+import { effectiveMaxStake } from '../src/limits.ts';
 import { abilityOf, cashOut, ladderFor, multOf, newRun, publicView, stepRun, LADDER, trapProb, rowsOf, hashRand, type RunState } from '../src/engine.ts';
 
 const ETH = 10n ** 18n;
@@ -147,4 +148,19 @@ for (const [mode, name] of [[0, 'Safe'], [1, 'Trencher'], [2, 'Degen']] as const
 test('hidden trap odds stay below 1 and the first floor matches the ladder maths', () => {
   for (const m of [0, 1, 2]) for (let k = 0; k < rowsOf(m); k++) assert.ok(trapProb(m, k) > 0 && trapProb(m, k) < 1);
   assert.ok(Math.abs(trapProb(2, 0) - (1 - 0.96 / 1.12)) < 1e-9);
+});
+
+test('stake caps follow the free pool, in whole steps, between min stake and the ceiling', () => {
+  const E = 10n ** 18n, f = (m: number, pool: bigint, ceil: bigint, min: bigint, step: bigint) => effectiveMaxStake(m, pool, ceil, min, step);
+  // launch pool 0.05 ETH reproduces the launch limits
+  assert.equal(f(0, E / 20n, 5n * E / 10000n, E / 10000n, E / 10000n), 5n * E / 10000n);   // Safe 0.0005
+  assert.equal(f(1, E / 20n, E / 100n, 2n * E / 10000n, 2n * E / 10000n), E / 1000n);      // Trencher 0.001
+  assert.equal(f(2, E / 20n, E / 5n, 5n * E / 10000n, 5n * E / 10000n), 2n * E / 1000n);   // Degen 0.002
+  // 10x the pool, 10x the cap
+  assert.equal(f(2, E / 2n, E / 5n, 5n * E / 10000n, 5n * E / 10000n), 2n * E / 100n);     // Degen 0.02
+  // the on-chain ceiling still wins
+  assert.equal(f(2, 100n * E, E / 5n, 5n * E / 10000n, 5n * E / 10000n), E / 5n);
+  // tiny pool never goes below the minimum stake, and results are whole steps
+  assert.equal(f(2, E / 1000n, E / 5n, 5n * E / 10000n, 5n * E / 10000n), 5n * E / 10000n);
+  assert.equal(f(1, 7n * E / 100n, E, 2n * E / 10000n, 2n * E / 10000n) % (2n * E / 10000n), 0n);
 });

@@ -1,4 +1,4 @@
-import type { RunState } from './engine.js';
+import type { RunState } from './engine.ts';
 
 export interface Store {
   insert(run: RunState): Promise<void>;
@@ -7,6 +7,7 @@ export interface Store {
   update<T>(commit: string, fn: (run: RunState) => Promise<{ run: RunState; out: T }>): Promise<T>;
   activeByPlayer(player: string): Promise<RunState | null>;     // ticketed, open or settling
   settling(): Promise<RunState[]>;
+  volume(player: string): Promise<bigint>;                      // total ETH staked in confirmed runs (unlocks characters)
   history(player: string, limit: number): Promise<RunState[]>;  // settled runs, newest first
   putNonce(n: string): Promise<void>;
   useNonce(n: string): Promise<boolean>;                        // true once, then false
@@ -43,6 +44,9 @@ export class MemoryStore implements Store {
   async history(player: string, limit: number) {
     return [...this.runs.values()].filter((r) => r.player.toLowerCase() === player.toLowerCase() && r.status === 'settled')
       .sort((a, b) => b.createdAt - a.createdAt).slice(0, limit).map((r) => structuredClone(r));
+  }
+  async volume(player: string) {
+    return [...this.runs.values()].filter((r) => r.player.toLowerCase() === player.toLowerCase() && ['open', 'settling', 'settled'].includes(r.status)).reduce((a, r) => a + BigInt(r.stake), 0n);
   }
   async putNonce(n: string) { this.nonces.add(n); }
   async useNonce(n: string) { return this.nonces.delete(n); }

@@ -56,14 +56,14 @@ button{font-family:var(--px)}.btn{cursor:pointer;border:3px solid var(--ink);bor
 </style></head><body><div class="app">
 <section class="scr on" id="menu"><div class="stars" id="stars"></div><div class="big" id="bigl"></div><div class="tl" id="tl"></div>
 <div style="position:relative;display:flex;gap:8px;align-items:center"><button class="pill" id="wb">CONNECT</button></div>
-<div class="menuwrap"><button class="stone" data-go="enter">ENTER GAME</button><button class="stone" data-go="demo">DEMO</button><button class="stone" data-go="chars">SELECT CHARACTER</button><button class="stone" data-go="shop">PURCHASE CHARACTERS</button>
+<div class="menuwrap"><button class="stone" data-go="enter">ENTER GAME</button><button class="stone" data-go="demo">DEMO</button><button class="stone" data-go="chars">SELECT CHARACTER</button><button class="stone" data-go="shop">UNLOCK CHARACTERS</button>
 <p class="tag">TESTNET ONLY | NO REAL-MONEY VALUE</p></div></section>
 
 <section class="scr" id="chars"><div class="top"><button class="btn gh" data-go="menu">BACK</button><h2>SELECT</h2><span></span></div>
 <div class="prev" id="prev"></div><div class="cgrid" id="cgrid"></div><button class="stone sm" data-go="menu">USE THIS BLOB</button><p class="note">Blobs look different. Locked blobs trade a lower multiplier ladder for their ability, shown as Top x.</p></section>
 
-<section class="scr" id="shop"><div class="top"><button class="btn gh" data-go="menu">BACK</button><h2>PURCHASE</h2><span class="badge" id="sb"></span></div>
-<div id="shl"></div><p class="note">Pay in testnet $SOUL. 80% of every purchase is burned, 20% goes to the treasury. The ETH value is a display estimate only.</p></section>
+<section class="scr" id="shop"><div class="top"><button class="btn gh" data-go="menu">BACK</button><h2>UNLOCKS</h2><span class="badge" id="sb"></span></div>
+<div id="shl"></div><p class="note">Two ways to unlock a blob: HOLD the $SOUL amount in your wallet (it stays unlocked only while you hold it), or WAGER the ETH amount (permanent). Every run counts toward wagering, win or lose. Holding is checked when you start a run.</p></section>
 
 <section class="scr" id="setup"><div class="top"><button class="btn gh" data-go="menu">BACK</button><h2>ENTER GAME</h2><span class="badge" id="eb"></span></div>
 <div class="card"><h3>1. MODE</h3><div class="modes" id="modes"></div></div>
@@ -94,7 +94,7 @@ const CH=[{n:'NOVA',t:'The Speedster',d:'Free blob. Standard ladder.'},{n:'TANK'
 const MODEINFO=['Checkpoint rows: a later trap costs 20% of run value.','Checkpoint rows: a later trap costs 80% of run value.','No checkpoints. A trap loses the run.'],MN=['SAFE PATH','TRENCHER','DEGEN MODE'];
 const KIND={safe:'safe',cp:'cp',trap:'trap',revived:'burnt'},BR=['Got rekt. The tower keeps what it takes.','A true degen never gives up. BET EVEN HIGHER.','Trap tile. The climb is over.'];
 const LAD=[1.12,1.34,1.68,2.24,3.30,4.48,5.60,6.72,7.84,9.41,11.8,15.7,23.5,31.4,39.2,47.0,54.9,65.9,82.3,110,165,220,274,329,384],WID=[2,3,3,4,4,5,5,5,6,6,7,7];
-let S={cfg:null,acct:null,token:null,mode:0,ch:+(()=>{try{return localStorage.dvch}catch(e){}})()||0,stake:0n,run:null,busy:0,armed:false,demo:false,owned:{0:1,1:1,2:1},price:{},bal:{},rate:null};
+let S={vol:0n,hbal:0,via:{},cfg:null,acct:null,token:null,mode:0,ch:+(()=>{try{return localStorage.dvch}catch(e){}})()||0,stake:0n,run:null,busy:0,armed:false,demo:false,owned:{0:1,1:1,2:1},price:{},bal:{},rate:null};
 const img=i=>`<img src="${ART[i]}" alt="${CH[i].n}">`;
 let tt;const toast=m=>{const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(tt);tt=setTimeout(()=>t.style.display='none',3500)};
 /* ---------- sound: synthesized, no files. Mute is remembered. ---------- */
@@ -133,25 +133,21 @@ async function connect(){
 }
 $('wb').onclick=()=>{SND.fx('click');connect()};if(E())E().on?.('accountsChanged',()=>location.reload());
 async function refresh(){
- $('wb').textContent=S.acct?S.acct.slice(0,6)+'...'+S.acct.slice(-4):'CONNECT';if(!S.acct||!S.cfg)return;const sh=S.cfg.shop;
- S.bal.eth=BigInt(await E().request({method:'eth_getBalance',params:[S.acct,'latest']}));S.bal.soul=BigInt(await call(SOUL,'0x70a08231'+A(S.acct)));
- for(const i of [3,4,5]){S.owned[i]=BigInt(await call(sh,'0x346d6ee8'+A(S.acct)+H(i)))===1n;const p=BigInt(await call(sh,'0xb7fafcd7'+H(i)));S.price[i]={raw:p,tok:Math.round(Number(p/10n**18n)).toLocaleString(),eth:S.rate?p*S.rate.e/S.rate.t:0n}}
+ $('wb').textContent=S.acct?S.acct.slice(0,6)+'...'+S.acct.slice(-4):'CONNECT';if(!S.acct||!S.cfg)return;
+ S.bal.eth=BigInt(await E().request({method:'eth_getBalance',params:[S.acct,'latest']}));
+ try{const u=await api('GET','unlocks');S.vol=BigInt(u.volume);S.hbal=Number(u.balance);S.via=u.via;for(const i of [3,4,5])S.owned[i]=!!u.owned[i]}catch(e){}
  if(!S.owned[S.ch])S.ch=0;hist()}
 async function hist(){try{const h=await api('GET','history');$('hist').innerHTML=h.slice(0,8).map(r=>`<li>${MN[r.mode]} | floor ${r.floor} | ${r.result} | ${eth(r.payout||0)} ETH</li>`).join('')||'<li>No runs yet</li>'}catch(e){}}
-async function buy(i){
- if(!S.acct){await connect();if(!S.acct)return}const sh=S.cfg.shop,p=S.price[i].raw;
- try{if(S.bal.soul<p)return toast('Not enough $SOUL. Get it on vibevibe.fun');
-  if(BigInt(await call(SOUL,'0xdd62ed3e'+A(S.acct)+A(sh)))<p){toast('Approve $SOUL in your wallet');await send(SOUL,'0x095ea7b3'+A(sh)+H(p))}
-  toast('Confirm the unlock');await send(sh,'0x094feeb4'+H(i));SND.fx('win');toast(CH[i].n+' unlocked!');await refresh();drawShop()}catch(e){toast(e.message||'cancelled')}}
 /* ---------- screens ---------- */
 function drawChars(){
  const c=CH[S.ch];$('prev').innerHTML=`<div class="stage f${S.ch}"><div class="aura">${img(S.ch)}</div></div><h2>${c.n}</h2><div class="note">${c.t}</div><p class="note">${c.d}${S.cfg?' Top '+lad(S.ch,2).slice(-1)[0]+'x in Degen.':''}</p>`;
- $('cgrid').innerHTML=CH.map((x,i)=>`<div class="cc ${i===S.ch?'on':''} ${S.owned[i]?'':'lk'}" data-c="${i}">${img(i)}<b>${x.n}</b><small>${S.owned[i]?(S.cfg?'Top '+lad(i,2).slice(-1)[0]+'x':'Free'):'Purchase'}</small></div>`).join('')}
-$('cgrid').onclick=e=>{const b=e.target.closest('[data-c]');if(!b)return;const i=+b.dataset.c;SND.fx('click');if(!S.owned[i]){toast('Unlock it in PURCHASE CHARACTERS');return}S.ch=i;try{localStorage.dvch=i}catch(e){}drawChars()};
+ $('cgrid').innerHTML=CH.map((x,i)=>`<div class="cc ${i===S.ch?'on':''} ${S.owned[i]?'':'lk'}" data-c="${i}">${img(i)}<b>${x.n}</b><small>${S.owned[i]?(S.cfg?'Top '+lad(i,2).slice(-1)[0]+'x':'Free'):'Locked'}</small></div>`).join('')}
+$('cgrid').onclick=e=>{const b=e.target.closest('[data-c]');if(!b)return;const i=+b.dataset.c;SND.fx('click');if(!S.owned[i]){toast('Wager more ETH to unlock it. See UNLOCK CHARACTERS');return}S.ch=i;try{localStorage.dvch=i}catch(e){}drawChars()};
+const THR={3:500000000000000000n,4:100000000000000000n,5:100000000000000000n},HOLD={3:6430000,4:2150000,5:2150000};
 function drawShop(){
- $('sb').textContent=S.acct?Math.floor(Number((S.bal.soul||0n)/10n**15n)/1000).toLocaleString()+' $SOUL':'NOT CONNECTED';
- $('shl').innerHTML=[3,4,5].map(i=>{const p=S.price[i];return`<div class="card shop f${i}"><div class="aura">${img(i)}</div><div><h3>${CH[i].n}</h3><p class="note" style="margin:0 0 6px">${CH[i].d}</p>${S.owned[i]?'<div class="sold">OWNED</div>':`<div class="price">${p?p.tok+' $SOUL':'...'}</div><div class="note">${p&&S.rate?'about '+eth(p.eth,4)+' ETH':''}</div><button class="btn" data-b="${i}" style="margin-top:6px">UNLOCK</button>`}</div></div>`}).join('')}
-$('shl').onclick=e=>{const b=e.target.closest('[data-b]');if(b){SND.fx('click');buy(+b.dataset.b)}};
+ const T=S.cfg?.unlock?Object.fromEntries(Object.entries(S.cfg.unlock).map(([k,v])=>[k,BigInt(v)])):THR,Hd=S.cfg?.hold?Object.fromEntries(Object.entries(S.cfg.hold).map(([k,v])=>[k,+v])):HOLD,v=S.vol||0n,b=S.hbal||0;
+ $('sb').textContent=S.acct?Math.floor(b).toLocaleString()+' $SOUL':'NOT CONNECTED';
+ $('shl').innerHTML=[3,4,5].map(i=>{const pw=Math.min(100,Number(v*100n/T[i])),ph=Math.min(100,b/Hd[i]*100);return`<div class="card shop f${i}"><div class="aura">${img(i)}</div><div><h3>${CH[i].n}</h3><p class="note" style="margin:0 0 6px">${CH[i].d}</p>${S.owned[i]?`<div class="sold">UNLOCKED ${S.via&&S.via[i]==='hold'?'(HOLDING $SOUL)':'(WAGERED)'}</div>`:`<div class="price">HOLD ${Hd[i].toLocaleString()} $SOUL</div><div class="prog" style="margin:5px 0"><i style="width:${ph}%"></i></div><div class="note">${Math.floor(b).toLocaleString()} / ${Hd[i].toLocaleString()} held</div><div class="price" style="margin-top:8px">OR WAGER ${eth(T[i],4)} ETH</div><div class="prog" style="margin:5px 0"><i style="width:${pw}%"></i></div><div class="note">${eth(v,4)} / ${eth(T[i],4)} ETH wagered</div>`}</div></div>`}).join('')+'<a class="stone sm" style="text-decoration:none;text-align:center" target="_blank" rel="noopener" href="https://testnet.vibevibe.fun/token/0xA1B60F81a18e42ec71cee5B32FAf09239067a057">GET $SOUL</a>'}
 function drawSetup(){
  const m=S.cfg.modes[S.mode];$('modes').innerHTML=S.cfg.modes.map(x=>`<div class="mode ${x.id===S.mode?'on':''}" data-m="${x.id}"><b>${MN[x.id]}</b><small>Stake ${eth(x.minStake,4)} to ${eth(x.maxStake,4)} ETH | up to ${x.rows} floors</small><small>${MODEINFO[x.id]}</small></div>`).join('');
  if(S.stake<BigInt(m.minStake)||S.stake>BigInt(m.maxStake))S.stake=BigInt(m.minStake);$('sv').textContent=eth(S.stake,5)+' ETH';$('mi').textContent='Whole steps of '+eth(m.step,5)+' ETH. The house pool caps each run\'s max payout.';
@@ -210,7 +206,6 @@ function finish(r){
  ov(`<h2>${demo?'DEMO: ':''}${head}</h2><p>${body}</p><p class="note">Stake ${eth(r.stake)} ETH | payout ${eth(pay)} ETH | floor ${r.floor}</p>${!demo&&r.status!=='settled'?'<p class="note">Settling on chain, reload in a moment to refresh.</p>':''}${demo?'':`<p class="mono">Commit: ${r.commit}<br>${r.serverSeed?'Seed: '+r.serverSeed+'<br>Check: keccak256(seed) = commit':''}${r.settleTx?'<br><a style="color:var(--lime)" target="_blank" rel="noopener" href="'+EXPL+'/tx/'+r.settleTx+'">Settlement transaction</a>':''}</p>`}<div class="btns"><button class="btn" onclick="again()">${demo?'Demo again':'Play again'}</button><button class="btn gh" onclick="cl();go('menu')">Menu</button></div>`)}
 function again(){cl();const d=S.demo;S.run=null;if(d)startDemo();else{go('setup');refresh()}}
 $('bd').style.backgroundImage='url('+ART.env+')';$('tl').innerHTML=LOGO(true);$('bigl').innerHTML=LOGO(false);$('stars').innerHTML=Array.from({length:22},()=>`<i style="left:${Math.random()*100}%;top:${Math.random()*100}%;animation-delay:-${Math.random()*3}s"></i>`).join('');
-async function price(){try{const rd=d=>(S.acct&&E()?call:rpc)(CURVE,d);if(BigInt(await rd('0xe7c2b772'))!==0n){S.rate=null;return}S.rate={e:BigInt(await rd('0x52b86d2b')),t:BigInt(await rd('0x343ee3b7'))};if(S.rate.t===0n)S.rate=null;for(const i of [3,4,5])if(S.price[i])S.price[i].eth=S.rate?S.price[i].raw*S.rate.e/S.rate.t:0n;if($('shop').classList.contains('on'))drawShop()}catch(e){S.rate=null}}
 (async()=>{try{S.cfg=await api('GET','config');S.stake=BigInt(S.cfg.modes[0].minStake)}catch(e){toast('Server not reachable: only DEMO works. Add ?api=https://your-server to go live.')}
- price();setInterval(price,10000);if(E()&&S.cfg){try{if(JSON.parse(sessionStorage.dv||'{}').t)connect()}catch(e){}}})();
+ if(E()&&S.cfg){try{if(JSON.parse(sessionStorage.dv||'{}').t)connect()}catch(e){}}})();
 </script></body></html>

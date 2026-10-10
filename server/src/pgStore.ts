@@ -1,6 +1,6 @@
 import pg from 'pg';
-import type { RunState } from './engine.js';
-import type { Store } from './store.js';
+import type { RunState } from './engine.ts';
+import type { Store } from './store.ts';
 
 export const SCHEMA = `
 create table if not exists runs (
@@ -38,6 +38,11 @@ export class PgStore implements Store {
   async history(player: string, limit: number) {
     await this.init();
     return (await this.pool.query(`select data from runs where lower(player)=$1 and status='settled' order by created_at desc limit $2`, [player.toLowerCase(), limit])).rows.map((x) => x.data);
+  }
+  async volume(player: string) {
+    await this.init();
+    const q = await this.pool.query(`select coalesce(sum((data->>'stake')::numeric),0)::text as v from runs where lower(player)=$1 and status in ('open','settling','settled')`, [player.toLowerCase()]);
+    return BigInt(q.rows[0].v);
   }
   async putNonce(n: string) { await this.init(); await this.pool.query('insert into nonces (nonce) values ($1)', [n]); }
   async useNonce(n: string) { await this.init(); return ((await this.pool.query(`delete from nonces where nonce=$1 and created_at > now() - interval '15 minutes'`, [n])).rowCount ?? 0) > 0; }

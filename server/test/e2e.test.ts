@@ -9,8 +9,8 @@ import { handle } from '../src/http.ts';
 import { boot } from '../src/runtime.ts';
 
 const E = process.env as Record<string, string>;
-const KEYS = { dep: E.DEPLOYER_KEY as Hex, p1: E.PLAYER1_KEY as Hex, p2: E.PLAYER2_KEY as Hex };
-const { cfg, store, svc } = boot({ RPC_URL: E.RPC_URL, CHAIN_ID: E.CHAIN_ID, VAULT: E.VAULT, SHOP: E.SHOP, OPERATOR_PRIVATE_KEY: E.OPERATOR_KEY, SESSION_SECRET: 'test-secret', DATABASE_URL: E.DATABASE_URL });
+const KEYS = { dep: E.DEPLOYER_KEY as Hex, p1: E.PLAYER1_KEY as Hex, p2: E.PLAYER2_KEY as Hex, p3: E.PLAYER3_KEY as Hex };
+const { cfg, store, svc } = boot({ RPC_URL: E.RPC_URL, CHAIN_ID: E.CHAIN_ID, VAULT: E.VAULT, SHOP: E.SHOP, OPERATOR_PRIVATE_KEY: E.OPERATOR_KEY, SESSION_SECRET: 'test-secret', DATABASE_URL: E.DATABASE_URL, UNLOCK_EMBER_WEI: '600000000000000', UNLOCK_FROST_WEI: '600000000000000', UNLOCK_SOUL_WEI: '1000000000000000', SOUL_TOKEN: E.SOUL, HOLD_EMBER_TOKENS: '1000', HOLD_FROST_TOKENS: '1000', HOLD_SOUL_TOKENS: '2000' });
 const chain = defineChain({ id: Number(E.CHAIN_ID), name: 'anvil', nativeCurrency: { name: 'E', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [E.RPC_URL] } } });
 const pub = createPublicClient({ chain, transport: http() });
 const wallet = (k: Hex) => createWalletClient({ account: privateKeyToAccount(k), chain, transport: http() });
@@ -20,7 +20,8 @@ const vaultAbi = parseAbi([
   'function totalClaimable() view returns (uint256)', 'function treasuryAccrued() view returns (uint256)',
   'event RunSettled(uint256 indexed runId, address indexed player, uint256 payout, bytes32 seed)',
 ]);
-const tokenAbi = parseAbi(['function mint(address to, uint256 a)', 'function approve(address,uint256) returns (bool)']);
+const ownerAbi = parseAbi(['function fundPool() payable', 'function setMode(uint8 id, (uint128 minStake,uint128 maxStake,uint128 step,uint16 feeBps,uint32 topMultX100,bool enabled) m)']);
+const tokenAbi = parseAbi(['function mint(address to, uint256 a)', 'function approve(address,uint256) returns (bool)', 'function transfer(address,uint256) returns (bool)']);
 const shopAbi = parseAbi(['function unlock(uint8 id)']);
 const vault = E.VAULT as Hex;
 const call = (method: string, path: string, body?: any, token?: string) => handle(svc, cfg, { method, path, headers: token ? { authorization: `Bearer ${token}` } : {}, body });
@@ -119,25 +120,31 @@ test('tickets: cannot be tampered, replayed, stolen or exceed stake rules', asyn
   await verifyFinished(await climb(a.token, 1));
 });
 
-test('shop: locked characters need a purchase, then abilities work and settle correctly', async () => {
-  const { token, addr } = await signIn(KEYS.p1); const w = wallet(KEYS.p1), dep = wallet(KEYS.dep);
-  await bad('POST', '/api/ticket', { mode: 2, character: 4, stake: parseEther('0.0005').toString() }, token, /locked/);
-  await dep.writeContract({ address: E.SOUL as Hex, abi: tokenAbi, functionName: 'mint', args: [addr, parseEther('20000000')] });
-  await pub.waitForTransactionReceipt({ hash: await w.writeContract({ address: E.SOUL as Hex, abi: tokenAbi, functionName: 'approve', args: [E.SHOP as Hex, parseEther('20000000')] }) });
-  for (const id of [3, 4, 5]) await pub.waitForTransactionReceipt({ hash: await w.writeContract({ address: E.SHOP as Hex, abi: shopAbi, functionName: 'unlock', args: [id] }) });
-  const used: string[] = [];
-  for (const character of [4, 5, 3, 4, 5, 3, 4, 5]) {
-    const { run } = await startRun(KEYS.p1, token, 2, character, parseEther('0.0005'));
+test('unlocks by volume: locked until enough ETH is wagered, then abilities work and settle', async () => {
+  const { token } = await signIn(KEYS.p2); const stake = parseEther('0.0003');       // thresholds in this test: Ember/Frost 0.0006, Soul 0.001
+  await bad('POST', '/api/ticket', { mode: 0, character: 4, stake: stake.toString() }, token, /Ember unlocks by holding 1,000 \$SOUL or wagering 0\.0006 ETH/);
+  let u = await ok('GET', '/api/unlocks', undefined, token);
+  assert.equal(u.volume, '0'); assert.deepEqual(u.owned, { 3: false, 4: false, 5: false });
+  for (let i = 0; i < 2; i++) { await startRun(KEYS.p2, token, 0, 0, stake); await verifyFinished(await climb(token, 1)); }
+  u = await ok('GET', '/api/unlocks', undefined, token);
+  assert.equal(BigInt(u.volume), stake * 2n); assert.deepEqual(u.owned, { 3: false, 4: true, 5: true });
+  await bad('POST', '/api/ticket', { mode: 0, character: 3, stake: stake.toString() }, token, /Soul unlocks by holding 2,000 \$SOUL or wagering 0\.001 ETH/);
+  for (let i = 0; i < 2; i++) { await startRun(KEYS.p2, token, 1, 4 + (i % 2), parseEther('0.0004')); await verifyFinished(await climb(token, 2)); }
+  u = await ok('GET', '/api/unlocks', undefined, token); assert.equal(u.owned['3'], true);
+  const abilities: string[] = [];
+  for (const character of [3, 4, 5, 3, 4, 5]) {
+    const { run } = await startRun(KEYS.p2, token, 2, character, parseEther('0.0005'));
     assert.equal(run.ability.kind, ['soul', 'ember', 'frost'][character - 3]);
-    const done = await climb(token, 6); used.push(done.history.map((h: any) => h.kind).join(','));
+    const done = await climb(token, 6); abilities.push(done.history.map((h: any) => h.kind).join(','));
     await verifyFinished(done);
   }
-  assert.ok(used.length === 8);
+  assert.equal(abilities.length, 6);
 });
 
 test('pool-gated payout cap is read from the chain and enforced', async () => {
   const { token } = await signIn(KEYS.p1);
-  const stake = parseEther('0.002');
+  const capNow = BigInt(((await ok('GET', '/api/config')).modes as any[])[2].maxStake);       // the stake cap follows the pool, so use what is allowed right now
+  const stake = capNow < parseEther('0.002') ? capNow : parseEther('0.002');
   const [pool, reserved] = await Promise.all(['pool', 'reserved'].map((f) => pub.readContract({ address: vault, abi: vaultAbi, functionName: f as any }) as Promise<bigint>));
   const expected = ((pool - reserved) * 2000n) / 10000n;                       // payoutCapBps = 2000 from the deploy script
   assert.ok(expected < stake * 384n, 'the pool cap, not the 384x ladder top, must be the binding limit');
@@ -187,4 +194,39 @@ test('history exposes everything needed to verify fairness', async () => {
   assert.ok(h.length > 5);
   for (const r of h) { assert.equal(keccak256(r.serverSeed), r.commit); assert.ok(r.clientSeed); }
   await checkBooks();
+});
+
+test('stake caps grow with the house pool', async () => {
+  const { token } = await signIn(KEYS.p1), dep = wallet(KEYS.dep);
+  const modeMax = async () => BigInt(((await ok('GET', '/api/config')).modes as any[])[2].maxStake);
+  const before = await modeMax(), free = (await pub.readContract({ address: vault, abi: vaultAbi, functionName: 'pool' }) as bigint) - (await pub.readContract({ address: vault, abi: vaultAbi, functionName: 'reserved' }) as bigint);
+  assert.ok(before <= parseEther('0.002'), 'launch ceiling applies at the small pool');
+  assert.ok(before <= (free * 400n) / 10000n + parseEther('0.0005'));
+  await bad('POST', '/api/ticket', { mode: 2, character: 0, stake: parseEther('0.02').toString() }, token, /stake out of range|max stake/);
+  // owner tops up the pool and raises the on-chain ceilings
+  await pub.waitForTransactionReceipt({ hash: await dep.writeContract({ address: vault, abi: ownerAbi, functionName: 'fundPool', value: parseEther('0.5') }) });
+  await pub.waitForTransactionReceipt({ hash: await dep.writeContract({ address: vault, abi: ownerAbi, functionName: 'setMode', args: [2, { minStake: parseEther('0.0005'), maxStake: parseEther('0.2'), step: parseEther('0.0005'), feeBps: 280, topMultX100: 38400, enabled: true }] }) });
+  const after = await modeMax(); assert.ok(after > before * 5n, `cap should have grown a lot: ${before} -> ${after}`);
+  assert.equal(after % parseEther('0.0005'), 0n);
+  await bad('POST', '/api/ticket', { mode: 2, character: 0, stake: (after + parseEther('0.0005')).toString() }, token, /max stake right now/);
+  const { run } = await startRun(KEYS.p1, token, 2, 0, after);                  // the biggest allowed stake works end to end
+  assert.equal(run.status, 'open'); await verifyFinished(await climb(token, 2));
+});
+
+test('unlocks by holding $SOUL: instant while held, gone when sold, volume path unaffected', async () => {
+  const { token, addr } = await signIn(KEYS.p3), dep = wallet(KEYS.dep), w = wallet(KEYS.p3), stake = parseEther('0.0003');
+  const tx = async (hash: Hex) => pub.waitForTransactionReceipt({ hash });
+  await bad('POST', '/api/ticket', { mode: 0, character: 4, stake: stake.toString() }, token, /holding 1,000 \$SOUL or wagering 0\.0006 ETH/);
+  await tx(await dep.writeContract({ address: E.SOUL as Hex, abi: tokenAbi, functionName: 'mint', args: [addr, parseEther('1000')] }));
+  let u = await ok('GET', '/api/unlocks', undefined, token);
+  assert.deepEqual(u.owned, { 3: false, 4: true, 5: true }); assert.equal(u.via['4'], 'hold'); assert.equal(u.balance, '1000');
+  await bad('POST', '/api/ticket', { mode: 0, character: 3, stake: stake.toString() }, token, /Soul unlocks by holding 2,000/);
+  await tx(await dep.writeContract({ address: E.SOUL as Hex, abi: tokenAbi, functionName: 'mint', args: [addr, parseEther('1000')] }));
+  u = await ok('GET', '/api/unlocks', undefined, token); assert.equal(u.owned['3'], true);
+  const { run } = await startRun(KEYS.p3, token, 2, 4, parseEther('0.0005'));        // Ember, unlocked only by holding
+  assert.equal(run.ability.kind, 'ember'); await verifyFinished(await climb(token, 5));
+  await tx(await w.writeContract({ address: E.SOUL as Hex, abi: tokenAbi, functionName: 'transfer', args: [dep.account.address, parseEther('2000')] }));   // sell everything
+  u = await ok('GET', '/api/unlocks', undefined, token);
+  assert.deepEqual(u.owned, { 3: false, 4: false, 5: false }); assert.equal(u.balance, '0');
+  await bad('POST', '/api/ticket', { mode: 0, character: 4, stake: stake.toString() }, token, /unlocks by holding/);
 });
