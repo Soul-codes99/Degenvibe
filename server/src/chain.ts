@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, defineChain, http, parseAbi, parseEventLogs, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import type { Cfg } from './config.ts';
+import type { Cfg } from './config.js';
 
 const vaultAbi = parseAbi([
   'event RunStarted(uint256 indexed runId, address indexed player, uint8 mode, uint8 character, uint256 stake, bytes32 commit, bytes32 clientSeed, uint256 maxPayout)',

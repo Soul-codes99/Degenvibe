@@ -1,6 +1,6 @@
 import type { Hex } from 'viem';
-import type { Cfg } from './config.ts';
-import type { Service } from './service.ts';
+import type { Cfg } from './config.js';
+import type { Service } from './service.js';
 
 export interface Req { method: string; path: string; headers: Record<string, string | undefined>; body?: any }
 export interface Res { status: number; body: unknown }

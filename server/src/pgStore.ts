@@ -1,6 +1,6 @@
 import pg from 'pg';
-import type { RunState } from './engine.ts';
-import type { Store } from './store.ts';
+import type { RunState } from './engine.js';
+import type { Store } from './store.js';
 
 export const SCHEMA = `
 create table if not exists runs (
