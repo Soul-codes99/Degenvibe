@@ -1,0 +1,11 @@
+.env
+.foundry/
+out/
+cache/
+broadcast/
+node_modules/
+.env
+package-lock.json
+.bash_history
+.cache/
+.npm/
